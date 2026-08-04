@@ -196,7 +196,7 @@ async function fetchIBMData() {
     throw new Error('Alpha Vantage API key missing. Edit docs/config.js and set ALPHA_VANTAGE_KEY.');
   }
 
-  const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol=IBM&outputsize=full&apikey=${ALPHA_VANTAGE_KEY}`;
+  const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=IBM&outputsize=full&apikey=${ALPHA_VANTAGE_KEY}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
 
@@ -214,7 +214,7 @@ async function fetchIBMData() {
   // Filter to last 10 years
   const tenYearsAgo = isoDate(addYears(new Date(rawDates[rawDates.length - 1]), -10));
   const allDates  = rawDates.filter(d => d >= tenYearsAgo);
-  const allCloses = allDates.map(d => parseFloat(ts[d]['5. adjusted close']));
+  const allCloses = allDates.map(d => parseFloat(ts[d]['4. close']));
 
   return {
     all: { dates: allDates, closes: allCloses },
