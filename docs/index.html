@@ -7,7 +7,6 @@
   <title>IBM Stock Dashboard</title>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/fft.js@4.0.4/lib/fft.js"></script>
-  <script>const ALPHA_VANTAGE_KEY = "IIY4F5R36KH5Z0JE";</script>
   <style>
     :root {
       --bg:      #0d1117;
@@ -192,29 +191,28 @@ function sliceWindow(allDates, allCloses, { years = null, months = null }) {
 }
 
 async function fetchIBMData() {
-  if (typeof ALPHA_VANTAGE_KEY === 'undefined' || ALPHA_VANTAGE_KEY === 'YOUR_KEY_HERE') {
-    throw new Error('Alpha Vantage API key missing. Edit docs/config.js and set ALPHA_VANTAGE_KEY.');
-  }
-
-  const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=IBM&outputsize=full&apikey=${ALPHA_VANTAGE_KEY}`;
+  // Yahoo Finance public endpoint — no API key required, CORS enabled
+  const url = 'https://query1.finance.yahoo.com/v8/finance/chart/IBM?interval=1d&range=10y';
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
 
   const json = await resp.json();
 
-  if (json['Information']) throw new Error('Alpha Vantage: ' + json['Information']);
-  if (json['Error Message']) throw new Error('Alpha Vantage: ' + json['Error Message']);
+  const result = json?.chart?.result?.[0];
+  if (!result) throw new Error('Unexpected Yahoo Finance response format.');
 
-  const ts = json['Time Series (Daily)'];
-  if (!ts) throw new Error('Unexpected Alpha Vantage response format.');
+  const timestamps = result.timestamps || result.timestamp;
+  const closes     = result.indicators?.quote?.[0]?.close;
+  if (!timestamps || !closes) throw new Error('Yahoo Finance: missing price data.');
 
-  // Sort ascending by date string (ISO format sorts lexicographically)
-  const rawDates = Object.keys(ts).sort();
-
-  // Filter to last 10 years
-  const tenYearsAgo = isoDate(addYears(new Date(rawDates[rawDates.length - 1]), -10));
-  const allDates  = rawDates.filter(d => d >= tenYearsAgo);
-  const allCloses = allDates.map(d => parseFloat(ts[d]['4. close']));
+  // Convert UNIX timestamps to ISO date strings, filter nulls
+  const allDates  = [];
+  const allCloses = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    if (closes[i] == null) continue;
+    allDates.push(isoDate(new Date(timestamps[i] * 1000)));
+    allCloses.push(closes[i]);
+  }
 
   return {
     all: { dates: allDates, closes: allCloses },
