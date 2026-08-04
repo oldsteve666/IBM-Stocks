@@ -78,8 +78,8 @@ IBM Stocks/
 
 | Componente | Tecnologia |
 |---|---|
-| Dati storici | Yahoo Finance (endpoint pubblico) |
+| Dati storici | Yahoo Finance (endpoint pubblico, nessuna chiave) |
 | Grafici | [Plotly.js 2.35.2](https://cdn.plot.ly/plotly-2.35.2.min.js) |
-| FFT (periodogramma) | [fft.js 4.0.4](https://cdn.jsdelivr.net/npm/fft.js@4.0.4/lib/fft.js) |
+| FFT (periodogramma) | Cooley-Tukey iterativo in JS vanilla (nessuna libreria esterna) |
 | Trend + regressione | JavaScript vanilla (OLS con equazioni normali) |
 | Deploy | GitHub Pages (`/docs` branch `main`) |

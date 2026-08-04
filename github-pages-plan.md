@@ -17,7 +17,7 @@ Tutto questo deve essere riscritto in JavaScript client-side, i dati provengono 
 
 ### Approccio scelto
 - **Dati:** Yahoo Finance endpoint pubblico — `https://query1.finance.yahoo.com/v8/finance/chart/IBM?interval=1d&range=10y` — nessuna chiave API, nessun limite
-- **Calcoli:** JavaScript puro nel browser — nessuna libreria statistica esterna; solo Plotly per i grafici e fft.js per la FFT
+- **Calcoli:** JavaScript puro nel browser — nessuna libreria statistica esterna; solo Plotly per i grafici; FFT implementata con algoritmo Cooley-Tukey in JS vanilla
 - **Deploy:** GitHub Pages dalla cartella `/docs` del branch `main`
 - **CI/CD:** nessun build step — `docs/index.html` è il file finale, deployato direttamente con `git push`
 - **Chiave API:** non necessaria
@@ -144,7 +144,7 @@ Portare in JavaScript le funzioni Python `decomposition_forecast()`: regressione
 **Expected Outcomes**
 - Funzione JS `decompositionForecast(closes, dates)` con lo stesso output strutturale della versione Python
 - OLS lineare: formula diretta (intercetta + slope)
-- FFT: via libreria fft.js (CDN), zero-padding a potenza di 2
+- FFT: algoritmo Cooley-Tukey iterativo in JS vanilla (`fftInPlace`), zero-padding a potenza di 2
 - Selezione armonici: power > mean + 2×std, top 10
 - Regressione armonica: OLS su design matrix sin/cos (nessuna intercetta), eliminazione gaussiana con pivoting parziale
 - Forecast 5 anni su business days (~252×5 giorni)
@@ -152,13 +152,13 @@ Portare in JavaScript le funzioni Python `decomposition_forecast()`: regressione
 
 **Todo List**
 1. Implementare `olsLinear(t, y)`
-2. Implementare `computePeriodogram(r)` tramite fft.js, correzione one-sided
-3. Implementare `selectHarmonics(freqs, power, maxN=10)` — soglia mean + 2×std
-4. Implementare `olsHarmonic(t, r, selectedFreqs)` — eliminazione gaussiana
-5. Implementare `decompositionForecast(closes, dates)` che assembla tutti i passi
+2. Implementare `fftInPlace(re, im)` — Cooley-Tukey iterativo con bit-reversal permutation
+3. Implementare `computePeriodogram(r)` tramite `fftInPlace`, correzione one-sided
+4. Implementare `selectHarmonics(freqs, power, maxN=10)` — soglia mean + 2×std
+5. Implementare `olsHarmonic(t, r, selectedFreqs)` — eliminazione gaussiana
+6. Implementare `decompositionForecast(closes, dates)` che assembla tutti i passi
 
 **Relevant Context**
-- `fft.js` 4.0.4: `https://cdn.jsdelivr.net/npm/fft.js@4.0.4/lib/fft.js`
 - OLS lineare: `b = (Σxy - n·x̄·ȳ) / (Σx² - n·x̄²)`, `a = ȳ - b·x̄`
 - Periodi nel periodogramma in trading days (1/freq)
 - `t_future = arange(n, n + len(future_dates))` — continua l'indice intero
@@ -183,7 +183,7 @@ Assemblare la pagina finale `docs/index.html` integrando fetch dati, calcoli, e 
 
 **Todo List**
 1. HTML + CSS dark theme con variabili CSS
-2. `<script>` CDN: Plotly 2.35.2, fft.js 4.0.4
+2. `<script>` CDN: solo Plotly 2.35.2 (FFT in JS vanilla, nessun CDN aggiuntivo)
 3. Funzioni JS: `fetchIBMData`, `naiveForecast`, `decompositionForecast`
 4. Funzioni Plotly: `LAYOUT_BASE`, `ciRibbon`, `renderHist`, `renderNaive`, `renderDecomp`, `renderPeriodo`
 5. `main()` async: fetch → calcola → renderizza
@@ -198,9 +198,8 @@ Assemblare la pagina finale `docs/index.html` integrando fetch dati, calcoli, e 
 | Risorsa | URL CDN | Motivo |
 |---|---|---|
 | Plotly 2.35.2 | `https://cdn.plot.ly/plotly-2.35.2.min.js` | Grafici |
-| fft.js 4.0.4 | `https://cdn.jsdelivr.net/npm/fft.js@4.0.4/lib/fft.js` | FFT per periodogramma in JS |
 
-Nessuna altra libreria JS necessaria — OLS, slice finestre, CI sono tutti in JS vanilla.
+Nessuna altra libreria JS necessaria — FFT (Cooley-Tukey), OLS, slice finestre e CI sono tutti implementati in JS vanilla.
 
 ---
 
@@ -213,13 +212,25 @@ Nessuna altra libreria JS necessaria — OLS, slice finestre, CI sono tutti in J
 
 ## Note post-implementazione
 
-### Abbandono di Alpha Vantage (risolto)
+### 1. Abbandono di Alpha Vantage (risolto)
 
 Alpha Vantage ha ristretto progressivamente il piano gratuito durante l'implementazione:
 1. `TIME_SERIES_DAILY_ADJUSTED` → diventato **premium**
 2. `outputsize=full` su `TIME_SERIES_DAILY` → diventato **premium**
 
 **Risoluzione**: sostituito con Yahoo Finance endpoint pubblico (`/v8/finance/chart`), nessuna chiave, nessun limite, 10 anni di dati disponibili. `docs/config.js` è stato eliminato.
+
+### 2. CORS bloccato su GitHub Pages (risolto)
+
+Yahoo Finance blocca le richieste `fetch()` da domini esterni (CORS) quando la pagina gira su `https://<username>.github.io`. In locale (file://) funziona perché il browser non applica CORS su file locali.
+
+**Risoluzione**: `fetchIBMData()` tenta prima la chiamata diretta; se fallisce (eccezione CORS o risposta vuota) ritenta automaticamente via proxy `https://corsproxy.io/?<url_encoded>`. Trasparente per l'utente.
+
+### 3. fft.js incompatibilità API (risolto)
+
+`fft.js` v4.0.4 non espone `createComplexArray` nel modo assunto → errore runtime `f.createComplexArray is not a function`.
+
+**Risoluzione**: rimossa la dipendenza da `fft.js` completamente. Implementato `fftInPlace(re, im)` — algoritmo Cooley-Tukey iterativo con bit-reversal permutation in JS vanilla (~30 righe). Nessun CDN aggiuntivo, nessun rischio di rotture per aggiornamenti di librerie esterne.
 
 ---
 
