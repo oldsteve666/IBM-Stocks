@@ -191,12 +191,23 @@ function sliceWindow(allDates, allCloses, { years = null, months = null }) {
 }
 
 async function fetchIBMData() {
-  // Yahoo Finance public endpoint — no API key required, CORS enabled
-  const url = 'https://query1.finance.yahoo.com/v8/finance/chart/IBM?interval=1d&range=10y';
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+  // Try direct Yahoo Finance first (works locally); fall back to CORS proxy for GitHub Pages
+  const YF_URL = 'https://query1.finance.yahoo.com/v8/finance/chart/IBM?interval=1d&range=10y';
+  const PROXY  = 'https://corsproxy.io/?' + encodeURIComponent(YF_URL);
 
-  const json = await resp.json();
+  let json;
+  try {
+    const resp = await fetch(YF_URL);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    json = await resp.json();
+    // Yahoo sometimes returns a CORS-blocked response with status 200 but no usable body
+    if (!json?.chart?.result?.[0]) throw new Error('empty');
+  } catch (_) {
+    // Direct request failed — use CORS proxy
+    const resp = await fetch(PROXY);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    json = await resp.json();
+  }
 
   const result = json?.chart?.result?.[0];
   if (!result) throw new Error('Unexpected Yahoo Finance response format.');
