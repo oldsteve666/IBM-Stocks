@@ -1,6 +1,6 @@
 # IBM Stock Dashboard — GitHub Pages
 
-Dashboard interattiva per le azioni IBM, deployata come pagina statica su GitHub Pages. Tutti i calcoli (regressione lineare, FFT, previsioni) sono eseguiti nel browser in JavaScript puro.
+Dashboard interattiva per le azioni IBM, deployata come pagina statica su GitHub Pages. Tutti i calcoli (regressione lineare, FFT, previsioni) sono eseguiti nel browser in JavaScript puro. Nessuna chiave API richiesta.
 
 ## Demo live
 
@@ -11,46 +11,53 @@ Dashboard interattiva per le azioni IBM, deployata come pagina statica su GitHub
 ## Funzionalità
 
 - **Storico prezzi IBM** con selettore 5Y / 1Y / 1M
-- **Previsione naive 1 mese** con intervallo di confidenza 95%
-- **Previsione decomposizione 5 anni** (trend lineare + ciclico armonico) con CI piatto ±1.96×RMSE
-- **Periodogramma** con frequenze armoniche selezionate
+- **Previsione naive 1 mese** con intervallo di confidenza 95% (modello random-walk, CI = 1.96 × σ × √h)
+- **Previsione decomposizione 5 anni** (trend lineare T + ciclo armonico C) con CI piatto ±1.96×RMSE
+- **Periodogramma** con frequenze armoniche selezionate evidenziate
 - Tema dark, grafici Plotly interattivi, aggiornamento automatico ogni 60 minuti
 
 ---
 
-## Setup
+## Dati
 
-### 1. Ottieni una chiave Alpha Vantage gratuita
+I prezzi storici IBM provengono dall'endpoint pubblico di **Yahoo Finance** — nessuna registrazione, nessuna chiave API, nessun limite di chiamate.
 
-1. Vai su <https://www.alphavantage.co/support/#api-key>
-2. Compila il form (nome, email, uso previsto)
-3. Ricevi la chiave (25 chiamate/giorno — sufficiente per uso personale)
+---
 
-### 2. Crea `docs/config.js`
+## Setup e deploy
 
-```js
-// docs/config.js  ← NON committare questo file
-const ALPHA_VANTAGE_KEY = "LA_TUA_CHIAVE_QUI";
-```
+### 1. Crea il repository GitHub
 
-> ⚠️ `docs/config.js` è in `.gitignore` — non verrà mai committato nel repository.
+1. Vai su <https://github.com/new>
+2. Nome repository: `ibm-stocks` (o simile)
+3. Visibilità: **Public** (necessario per GitHub Pages gratuito)
+4. Non inizializzare con README — lo abbiamo già
 
-### 3. Primo push
+### 2. Carica i file
 
-```bash
-git init
-git remote add origin https://github.com/<username>/<repo-name>.git
-git add -A
-git commit -m "init: IBM Stock Dashboard"
-git push -u origin main
-```
+Con **GitHub Desktop** (consigliato se non hai dimestichezza con git):
 
-### 4. Abilita GitHub Pages
+1. Scarica e installa [GitHub Desktop](https://desktop.github.com/)
+2. Fai login con il tuo account GitHub
+3. **File → Add Local Repository** → seleziona questa cartella
+4. Se chiede di inizializzare git, clicca **Initialize Repository**
+5. Clicca **Publish repository** → scegli il nome, spunta **Public** → Publish
+
+Oppure con **upload manuale** su github.com:
+
+1. Apri il repository appena creato
+2. Clicca **"uploading an existing file"**
+3. Trascina i file: `.gitignore`, `README.md`, `github-pages-plan.md`, `docs/index.html`
+4. Clicca **Commit changes**
+
+### 3. Abilita GitHub Pages
 
 1. Repository → **Settings** → **Pages**
 2. Source: **Deploy from a branch**
 3. Branch: `main` — Folder: `/docs`
-4. Clicca **Save** → dopo ~1 minuto la pagina è live
+4. Clicca **Save**
+
+Dopo ~1 minuto la pagina è live su `https://<username>.github.io/<repo-name>/`.
 
 ---
 
@@ -59,8 +66,7 @@ git push -u origin main
 ```
 IBM Stocks/
 ├── docs/
-│   ├── index.html        # pagina statica completa
-│   └── config.js         # chiave API (NON committata — in .gitignore)
+│   └── index.html        # pagina statica completa (JS + calcoli + Plotly)
 ├── .gitignore
 ├── README.md
 └── github-pages-plan.md
@@ -68,8 +74,12 @@ IBM Stocks/
 
 ---
 
-## Note di sicurezza
+## Tecnologie usate
 
-- La chiave Alpha Vantage è usata lato client (browser) — inevitabile per pagine statiche. È accettabile per uso personale/demo.
-- Non usare questa configurazione per dati sensibili o in produzione.
-- Il repository deve essere **pubblico** per GitHub Pages gratuito (piano Free).
+| Componente | Tecnologia |
+|---|---|
+| Dati storici | Yahoo Finance (endpoint pubblico) |
+| Grafici | [Plotly.js 2.35.2](https://cdn.plot.ly/plotly-2.35.2.min.js) |
+| FFT (periodogramma) | [fft.js 4.0.4](https://cdn.jsdelivr.net/npm/fft.js@4.0.4/lib/fft.js) |
+| Trend + regressione | JavaScript vanilla (OLS con equazioni normali) |
+| Deploy | GitHub Pages (`/docs` branch `main`) |
