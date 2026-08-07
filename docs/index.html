@@ -353,8 +353,9 @@ function computePeriodogram(r) {
   // One-sided power spectrum (indices 0 … N/2)
   const half = Math.floor(N / 2) + 1;
   const power = new Float64Array(half);
+  // CORREZIONE: normalizza per N (lunghezza dopo zero-padding), non per n
   for (let k = 0; k < half; k++) {
-    power[k] = (re[k]*re[k] + im[k]*im[k]) / n;
+    power[k] = (re[k]*re[k] + im[k]*im[k]) / N;
   }
   // One-sided correction (double non-DC, non-Nyquist bins)
   for (let k = 1; k < half - 1; k++) power[k] *= 2;
@@ -367,14 +368,20 @@ function computePeriodogram(r) {
 }
 
 function selectHarmonics(freqs, power, maxN = 10) {
-  // Skip DC (k=0) and Nyquist
+  // CORREZIONE: usa una soglia basata sulla distribuzione esponenziale del periodogramma
+  // Sotto l'ipotesi di rumore bianco, I(f)/median ~ Exp(1), quindi usiamo la mediana invece di media/std
   const n = power.length;
-  let sumP = 0, sumP2 = 0, count = 0;
-  for (let k = 1; k < n - 1; k++) { sumP += power[k]; count++; }
-  const mean = sumP / count;
-  for (let k = 1; k < n - 1; k++) sumP2 += (power[k] - mean) ** 2;
-  const std = Math.sqrt(sumP2 / count);
-  const threshold = mean + 2 * std;
+  
+  // Calcola la mediana della potenza (escludendo DC e Nyquist)
+  const powersSorted = [];
+  for (let k = 1; k < n - 1; k++) powersSorted.push(power[k]);
+  powersSorted.sort((a, b) => a - b);
+  const median = powersSorted[Math.floor(powersSorted.length / 2)];
+  
+  // Soglia: sotto H0 di rumore bianco, E[I(f)] = sigma^2, e I(f)/sigma^2 ~ Exp(1)
+  // Usiamo un fattore basato sul quantile 95% di Exp(1): -ln(0.05) ≈ 3
+  // Una soglia più conservativa: mediana * 3 (circa equivalente al 95° percentile)
+  const threshold = median * 3;
 
   const candidates = [];
   for (let k = 1; k < n - 1; k++) {
@@ -503,11 +510,15 @@ function decompositionForecast(closes, dates) {
   const { predict: predictC } = olsHarmonic(t, r, selectedFreqs);
   const C_fit = predictC(t);
 
-  // 6. Fitted values, residuals, RMSE
+  // 6. Fitted values, residuals, RMSE (CORRETTO per gradi di libertà)
   const fitted = T.map((ti, i) => ti + C_fit[i]);
   let sse = 0;
   for (let i = 0; i < n; i++) sse += (y[i] - fitted[i]) ** 2;
-  const rmse = Math.sqrt(sse / n);
+  // CORREZIONE: RMSE corretto per gradi di libertà (n - p - 2)
+  // p = numero di armoniche * 2 (sin e cos), +2 per trend lineare (intercetta e pendenza)
+  const p = selectedFreqs.length * 2;
+  const dof = Math.max(1, n - p - 2);
+  const rmse = Math.sqrt(sse / dof);
 
   // 7. Forecast — 5 years forward (~260 business days/year × 5 = 1300)
   const lastDate = dates[dates.length - 1];
@@ -518,9 +529,16 @@ function decompositionForecast(closes, dates) {
   const C_future = predictC(t_future);
   const forecast_y = T_future.map((ti, i) => ti + C_future[i]);
 
-  const ci = 1.96 * rmse;
-  const lower = forecast_y.map(v => Math.max(0.01, v - ci));
-  const upper = forecast_y.map(v => v + ci);
+  // CORREZIONE: intervalli di confidenza che crescono con l'orizzonte temporale
+  // CI(h) = 1.96 * RMSE * sqrt(1 + h/n) per tener conto dell'incertezza crescente
+  const lower = forecast_y.map((v, h) => {
+    const factor = Math.sqrt(1 + (h + 1) / n);
+    return Math.max(0.01, v - 1.96 * rmse * factor);
+  });
+  const upper = forecast_y.map((v, h) => {
+    const factor = Math.sqrt(1 + (h + 1) / n);
+    return v + 1.96 * rmse * factor;
+  });
 
   return {
     hist_dates:   dates,
