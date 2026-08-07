@@ -126,7 +126,7 @@
     <!-- Decomposition forecast -->
     <section>
       <h2>Decomposition Forecast — 5 Years (T + C)</h2>
-      <p class="sub">Linear trend T + harmonic cycle C. CI = ±1.96 × RMSE (flat band — model uncertainty, not growing).</p>
+      <p class="sub">Linear trend T + harmonic cycle C. CI = ±1.96 × RMSE × √(1 + h/n) (growing band — uncertainty increases with forecast horizon).</p>
       <div id="chart-decomp" class="chart-area"></div>
       <div class="meta-row" id="meta-decomp"></div>
     </section>
@@ -678,7 +678,7 @@ function renderDecomp(decomp) {
   };
   const ribbonTraces = ciRibbon(
     decomp.forecast_dates, decomp.upper, decomp.lower,
-    'rgb(63,185,80)', '95% CI (±1.96×RMSE)'
+    'rgb(63,185,80)', '95% CI (growing)'
   );
   const layout = Object.assign({}, LAYOUT_BASE, {
     yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { tickprefix: '$' }),
