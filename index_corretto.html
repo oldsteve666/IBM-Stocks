@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="3600">
+  <title>IBM Stock Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      --bg:      #0d1117;
+      --surface: #161b22;
+      --border:  #30363d;
+      --text:    #e6edf3;
+      --muted:   #8b949e;
+      --accent:  #58a6ff;
+      --green:   #3fb950;
+      --red:     #f85149;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 24px;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 600; }
+    header p  { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+    main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    section h2 { font-size: 1rem; font-weight: 600; margin-bottom: 4px; }
+    section p.sub { color: var(--muted); font-size: 0.8rem; margin-bottom: 14px; }
+    .chart-area { width: 100%; height: 360px; }
+    .meta-row {
+      display: flex; flex-wrap: wrap; gap: 16px;
+      margin-top: 12px; font-size: 0.8rem; color: var(--muted);
+    }
+    .meta-row span b { color: var(--text); }
+
+    /* Period selector buttons */
+    .period-group {
+      display: flex; gap: 6px; margin-bottom: 14px;
+    }
+    .period-btn {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 4px 14px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .period-btn:hover  { border-color: var(--accent); color: var(--text); }
+    .period-btn.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(88,166,255,0.08);
+    }
+
+    /* Loading / error */
+    #loading, #error-msg {
+      text-align: center;
+      padding: 60px 20px;
+      font-size: 1rem;
+    }
+    #loading { color: var(--muted); }
+    #error-msg { color: var(--red); display: none; }
+    #charts { display: none; }
+
+    footer {
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding: 16px;
+      margin-top: 32px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>IBM Stock Dashboard</h1>
+  <p>Historical prices, naive 1-month forecast, and 5-year decomposition forecast — all computed client-side.</p>
+</header>
+
+<main>
+  <div id="loading">⏳ Fetching IBM data from Alpha Vantage…</div>
+  <div id="error-msg"></div>
+
+  <div id="charts">
+
+    <!-- Historical chart -->
+    <section>
+      <h2>Historical Close Price</h2>
+      <p class="sub">Adjusted daily close price. Use the buttons to change the time window.</p>
+      <div class="period-group" id="period-buttons">
+        <button class="period-btn active" data-key="hist_5y">5Y</button>
+        <button class="period-btn" data-key="hist_1y">1Y</button>
+        <button class="period-btn" data-key="hist_1m">1M</button>
+      </div>
+      <div id="chart-hist" class="chart-area"></div>
+    </section>
+
+    <!-- Naive forecast -->
+    <section>
+      <h2>Naive 1-Month Forecast</h2>
+      <p class="sub">Random-walk model. CI = 1.96 × σ × √h where σ = std of last-30-day daily changes.</p>
+      <div id="chart-naive" class="chart-area"></div>
+      <div class="meta-row" id="meta-naive"></div>
+    </section>
+
+    <!-- Decomposition forecast -->
+    <section>
+      <h2>Decomposition Forecast — 5 Years (T + C)</h2>
+      <p class="sub">Linear trend T + harmonic cycle C. CI = ±1.96 × RMSE (flat band — model uncertainty, not growing).</p>
+      <div id="chart-decomp" class="chart-area"></div>
+      <div class="meta-row" id="meta-decomp"></div>
+    </section>
+
+    <!-- Periodogram -->
+    <section>
+      <h2>Periodogram</h2>
+      <p class="sub">Spectral power of detrended returns. Vertical lines = selected harmonics for cycle C.</p>
+      <div id="chart-periodo" class="chart-area"></div>
+      <div class="meta-row" id="meta-periodo"></div>
+    </section>
+
+  </div><!-- /#charts -->
+</main>
+
+<footer>Made with IBM Bob</footer>
+
+<script>
+/* =========================================================
+   UTILITIES
+   ========================================================= */
+
+function isoDate(d) {
+  // Returns "YYYY-MM-DD" from a Date object
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addYears(date, y) {
+  const d = new Date(date);
+  d.setFullYear(d.getFullYear() + y);
+  return d;
+}
+
+function addMonths(date, m) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + m);
+  return d;
+}
+
+/* =========================================================
+   SUB-TASK 2 — DATA FETCH & SLICE
+   ========================================================= */
+
+function sliceWindow(allDates, allCloses, { years = null, months = null }) {
+  const last = new Date(allDates[allDates.length - 1]);
+  let cutoff;
+  if (years  !== null) cutoff = addYears(last, -years);
+  else if (months !== null) cutoff = addMonths(last, -months);
+  else cutoff = new Date(0);
+
+  const cutIso = isoDate(cutoff);
+  const idx = allDates.findIndex(d => d >= cutIso);
+  if (idx === -1) return { dates: [], closes: [] };
+  return {
+    dates:  allDates.slice(idx),
+    closes: allCloses.slice(idx),
+  };
+}
+
+async function fetchIBMData() {
+  // Try direct Yahoo Finance first (works locally); fall back to CORS proxy for GitHub Pages
+  const YF_URL = 'https://query1.finance.yahoo.com/v8/finance/chart/IBM?interval=1d&range=10y';
+  const PROXY  = 'https://corsproxy.io/?' + encodeURIComponent(YF_URL);
+
+  let json;
+  try {
+    const resp = await fetch(YF_URL);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    json = await resp.json();
+    // Yahoo sometimes returns a CORS-blocked response with status 200 but no usable body
+    if (!json?.chart?.result?.[0]) throw new Error('empty');
+  } catch (_) {
+    // Direct request failed — use CORS proxy
+    const resp = await fetch(PROXY);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    json = await resp.json();
+  }
+
+  const result = json?.chart?.result?.[0];
+  if (!result) throw new Error('Unexpected Yahoo Finance response format.');
+
+  const timestamps = result.timestamps || result.timestamp;
+  const closes     = result.indicators?.quote?.[0]?.close;
+  if (!timestamps || !closes) throw new Error('Yahoo Finance: missing price data.');
+
+  // Convert UNIX timestamps to ISO date strings, filter nulls
+  const allDates  = [];
+  const allCloses = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    if (closes[i] == null) continue;
+    allDates.push(isoDate(new Date(timestamps[i] * 1000)));
+    allCloses.push(closes[i]);
+  }
+
+  return {
+    all: { dates: allDates, closes: allCloses },
+    hist_5y: sliceWindow(allDates, allCloses, { years: 5 }),
+    hist_1y: sliceWindow(allDates, allCloses, { years: 1 }),
+    hist_1m: sliceWindow(allDates, allCloses, { months: 1 }),
+  };
+}
+
+/* =========================================================
+   SUB-TASK 3 — NAIVE FORECAST
+   ========================================================= */
+
+function stdDiff(arr) {
+  // std of first differences of arr (last 30 values used upstream)
+  const diffs = [];
+  for (let i = 1; i < arr.length; i++) diffs.push(arr[i] - arr[i - 1]);
+  if (diffs.length === 0) return 0;
+  const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+  const variance = diffs.reduce((s, x) => s + (x - mean) ** 2, 0) / diffs.length;
+  return Math.sqrt(variance);
+}
+
+function nextBusinessDays(lastDateStr, count) {
+  const result = [];
+  const d = new Date(lastDateStr);
+  // Advance to avoid including lastDate itself
+  d.setDate(d.getDate() + 1);
+  while (result.length < count) {
+    const dow = d.getDay(); // 0=Sun, 6=Sat
+    if (dow !== 0 && dow !== 6) result.push(isoDate(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return result;
+}
+
+function naiveForecast(closes, dates) {
+  const last30 = closes.slice(-30);
+  const sigma  = stdDiff(last30);
+  const lastClose = closes[closes.length - 1];
+  const lastDate  = dates[dates.length - 1];
+
+  // ~22 business days in ~30 calendar days
+  const futureDates = nextBusinessDays(lastDate, 22);
+
+  const forecast = futureDates.map(() => lastClose);
+  const lower    = futureDates.map((_, h) => lastClose - 1.96 * sigma * Math.sqrt(h + 1));
+  const upper    = futureDates.map((_, h) => lastClose + 1.96 * sigma * Math.sqrt(h + 1));
+
+  return {
+    last_date:  lastDate,
+    last_close: lastClose,
+    dates:      futureDates,
+    forecast,
+    lower,
+    upper,
+    sigma,
+  };
+}
+
+/* =========================================================
+   SUB-TASK 4 — DECOMPOSITION FORECAST (T + C)
+   ========================================================= */
+
+function olsLinear(t, y) {
+  // Simple OLS: y = a + b*t
+  const n = t.length;
+  let sumT = 0, sumY = 0, sumTT = 0, sumTY = 0;
+  for (let i = 0; i < n; i++) {
+    sumT  += t[i];
+    sumY  += y[i];
+    sumTT += t[i] * t[i];
+    sumTY += t[i] * y[i];
+  }
+  const meanT = sumT / n, meanY = sumY / n;
+  const b = (sumTY - n * meanT * meanY) / (sumTT - n * meanT * meanT);
+  const a = meanY - b * meanT;
+  return { a, b };
+}
+
+function fftInPlace(re, im) {
+  // Cooley-Tukey iterative FFT — re/im are Float64Arrays of length N (power of 2)
+  const N = re.length;
+  // Bit-reversal permutation
+  for (let i = 1, j = 0; i < N; i++) {
+    let bit = N >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [re[i], re[j]] = [re[j], re[i]];
+      [im[i], im[j]] = [im[j], im[i]];
+    }
+  }
+  // Butterfly passes
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = -2 * Math.PI / len;
+    const wRe = Math.cos(ang), wIm = Math.sin(ang);
+    for (let i = 0; i < N; i += len) {
+      let curRe = 1, curIm = 0;
+      for (let j = 0; j < len / 2; j++) {
+        const uRe = re[i+j],           uIm = im[i+j];
+        const vRe = re[i+j+len/2] * curRe - im[i+j+len/2] * curIm;
+        const vIm = re[i+j+len/2] * curIm + im[i+j+len/2] * curRe;
+        re[i+j]         = uRe + vRe;  im[i+j]         = uIm + vIm;
+        re[i+j+len/2]   = uRe - vRe;  im[i+j+len/2]   = uIm - vIm;
+        const nextRe = curRe * wRe - curIm * wIm;
+        curIm = curRe * wIm + curIm * wRe;
+        curRe = nextRe;
+      }
+    }
+  }
+}
+
+function computePeriodogram(r) {
+  // One-sided periodogram — pure JS Cooley-Tukey, no external library
+  const n = r.length;
+
+  // Zero-pad to next power of 2
+  let N = 1;
+  while (N < n) N <<= 1;
+
+  const re = new Float64Array(N);
+  const im = new Float64Array(N);
+  for (let i = 0; i < n; i++) re[i] = r[i];
+
+  fftInPlace(re, im);
+
+  // One-sided power spectrum (indices 0 … N/2)
+  const half = Math.floor(N / 2) + 1;
+  const power = new Float64Array(half);
+  // CORREZIONE: normalizza per N (lunghezza dopo zero-padding), non per n
+  for (let k = 0; k < half; k++) {
+    power[k] = (re[k]*re[k] + im[k]*im[k]) / N;
+  }
+  // One-sided correction (double non-DC, non-Nyquist bins)
+  for (let k = 1; k < half - 1; k++) power[k] *= 2;
+
+  // Frequencies in cycles/trading-day
+  const freqs = new Float64Array(half);
+  for (let k = 0; k < half; k++) freqs[k] = k / N;
+
+  return { freqs, power };
+}
+
+function selectHarmonics(freqs, power, maxN = 10) {
+  // CORREZIONE: usa una soglia basata sulla distribuzione esponenziale del periodogramma
+  // Sotto l'ipotesi di rumore bianco, I(f)/median ~ Exp(1), quindi usiamo la mediana invece di media/std
+  const n = power.length;
+  
+  // Calcola la mediana della potenza (escludendo DC e Nyquist)
+  const powersSorted = [];
+  for (let k = 1; k < n - 1; k++) powersSorted.push(power[k]);
+  powersSorted.sort((a, b) => a - b);
+  const median = powersSorted[Math.floor(powersSorted.length / 2)];
+  
+  // Soglia: sotto H0 di rumore bianco, E[I(f)] = sigma^2, e I(f)/sigma^2 ~ Exp(1)
+  // Usiamo un fattore basato sul quantile 95% di Exp(1): -ln(0.05) ≈ 3
+  // Una soglia più conservativa: mediana * 3 (circa equivalente al 95° percentile)
+  const threshold = median * 3;
+
+  const candidates = [];
+  for (let k = 1; k < n - 1; k++) {
+    if (freqs[k] > 0 && power[k] > threshold) {
+      candidates.push({ freq: freqs[k], pow: power[k] });
+    }
+  }
+  // Sort by power descending, take top maxN
+  candidates.sort((a, b) => b.pow - a.pow);
+  return candidates.slice(0, maxN).map(c => c.freq);
+}
+
+function gaussianElim(A, b) {
+  // Solve A*x = b via Gaussian elimination with partial pivoting
+  // A is n×n (flat row-major Float64Array or array), b is length-n array
+  const n = b.length;
+  const M = A.map(row => row.slice()); // deep copy
+  const rhs = b.slice();
+
+  for (let col = 0; col < n; col++) {
+    // Find pivot
+    let maxRow = col;
+    for (let row = col + 1; row < n; row++) {
+      if (Math.abs(M[row][col]) > Math.abs(M[maxRow][col])) maxRow = row;
+    }
+    [M[col], M[maxRow]] = [M[maxRow], M[col]];
+    [rhs[col], rhs[maxRow]] = [rhs[maxRow], rhs[col]];
+
+    if (Math.abs(M[col][col]) < 1e-14) continue; // singular column
+
+    for (let row = col + 1; row < n; row++) {
+      const factor = M[row][col] / M[col][col];
+      for (let c = col; c < n; c++) M[row][c] -= factor * M[col][c];
+      rhs[row] -= factor * rhs[col];
+    }
+  }
+
+  // Back-substitution
+  const x = new Array(n).fill(0);
+  for (let row = n - 1; row >= 0; row--) {
+    let s = rhs[row];
+    for (let c = row + 1; c < n; c++) s -= M[row][c] * x[c];
+    x[row] = Math.abs(M[row][row]) < 1e-14 ? 0 : s / M[row][row];
+  }
+  return x;
+}
+
+function olsHarmonic(t, r, selectedFreqs) {
+  // OLS regression of r on harmonic design matrix (no intercept)
+  // Columns: [sin(2π f1 t), cos(2π f1 t), sin(2π f2 t), cos(2π f2 t), …]
+  const n = t.length;
+  const K = selectedFreqs.length;
+  const p = 2 * K; // number of parameters
+
+  if (p === 0) return { coeffs: [], predict: () => 0 };
+
+  // Build design matrix X (n × p)
+  const X = [];
+  for (let i = 0; i < n; i++) {
+    const row = [];
+    for (const f of selectedFreqs) {
+      row.push(Math.sin(2 * Math.PI * f * t[i]));
+      row.push(Math.cos(2 * Math.PI * f * t[i]));
+    }
+    X.push(row);
+  }
+
+  // Normal equations: (X'X) β = X'r
+  // Build X'X (p×p) and X'r (p)
+  const XtX = Array.from({ length: p }, () => new Array(p).fill(0));
+  const Xtr = new Array(p).fill(0);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < p; j++) {
+      Xtr[j] += X[i][j] * r[i];
+      for (let k = 0; k < p; k++) XtX[j][k] += X[i][j] * X[i][k];
+    }
+  }
+
+  const coeffs = gaussianElim(XtX, Xtr);
+
+  function predict(tArr) {
+    return tArr.map(ti => {
+      let val = 0;
+      for (let j = 0; j < selectedFreqs.length; j++) {
+        val += coeffs[2*j]   * Math.sin(2 * Math.PI * selectedFreqs[j] * ti);
+        val += coeffs[2*j+1] * Math.cos(2 * Math.PI * selectedFreqs[j] * ti);
+      }
+      return val;
+    });
+  }
+
+  return { coeffs, predict };
+}
+
+function businessDaysForward(lastDateStr, nDays) {
+  return nextBusinessDays(lastDateStr, nDays);
+}
+
+function decompositionForecast(closes, dates) {
+  const n = closes.length;
+  const y = closes;
+  const t = Array.from({ length: n }, (_, i) => i);
+
+  // 1. Trend T = a + b*t
+  const { a, b } = olsLinear(t, y);
+  const T = t.map(ti => a + b * ti);
+
+  // 2. Detrended residuals
+  const r = y.map((yi, i) => yi - T[i]);
+
+  // 3. Periodogram
+  const { freqs, power } = computePeriodogram(r);
+
+  // Sort by period ascending (short → long), skip DC (freq=0)
+  const periodoPoints = [];
+  for (let k = 1; k < freqs.length; k++) {
+    if (freqs[k] > 0) periodoPoints.push({ freq: freqs[k], pow: power[k], period: 1 / freqs[k] });
+  }
+  periodoPoints.sort((a, b) => a.period - b.period);
+
+  // 4. Select harmonics
+  const selectedFreqs = selectHarmonics(freqs, power, 10);
+  const selectedPeriods = selectedFreqs.map(f => 1 / f);
+
+  // 5. Harmonic regression C
+  const { predict: predictC } = olsHarmonic(t, r, selectedFreqs);
+  const C_fit = predictC(t);
+
+  // 6. Fitted values, residuals, RMSE (CORRETTO per gradi di libertà)
+  const fitted = T.map((ti, i) => ti + C_fit[i]);
+  let sse = 0;
+  for (let i = 0; i < n; i++) sse += (y[i] - fitted[i]) ** 2;
+  // CORREZIONE: RMSE corretto per gradi di libertà (n - p - 2)
+  // p = numero di armoniche * 2 (sin e cos), +2 per trend lineare (intercetta e pendenza)
+  const p = selectedFreqs.length * 2;
+  const dof = Math.max(1, n - p - 2);
+  const rmse = Math.sqrt(sse / dof);
+
+  // 7. Forecast — 5 years forward (~260 business days/year × 5 = 1300)
+  const lastDate = dates[dates.length - 1];
+  const fwdDates = businessDaysForward(lastDate, 5 * 252); // ~252 bdays/year
+  const t_future = Array.from({ length: fwdDates.length }, (_, i) => n + i);
+
+  const T_future = t_future.map(ti => a + b * ti);
+  const C_future = predictC(t_future);
+  const forecast_y = T_future.map((ti, i) => ti + C_future[i]);
+
+  // CORREZIONE: intervalli di confidenza che crescono con l'orizzonte temporale
+  // CI(h) = 1.96 * RMSE * sqrt(1 + h/n) per tener conto dell'incertezza crescente
+  const lower = forecast_y.map((v, h) => {
+    const factor = Math.sqrt(1 + (h + 1) / n);
+    return Math.max(0.01, v - 1.96 * rmse * factor);
+  });
+  const upper = forecast_y.map((v, h) => {
+    const factor = Math.sqrt(1 + (h + 1) / n);
+    return v + 1.96 * rmse * factor;
+  });
+
+  return {
+    hist_dates:   dates,
+    hist_close:   closes,
+    fitted_dates: dates,
+    fitted_y:     fitted,
+    forecast_dates: fwdDates,
+    forecast_y,
+    lower,
+    upper,
+    periodogram_freqs:   periodoPoints.map(p => p.freq),
+    periodogram_power:   periodoPoints.map(p => p.pow),
+    periodogram_periods: periodoPoints.map(p => p.period),
+    selected_freqs:      selectedFreqs,
+    selected_periods:    selectedPeriods,
+    n_harmonics:         selectedFreqs.length,
+    rmse,
+    trend_a: a,
+    trend_b: b,
+  };
+}
+
+/* =========================================================
+   SUB-TASK 5 — PLOTLY RENDERING
+   ========================================================= */
+
+const PALETTE = {
+  bg:      '#0d1117',
+  surface: '#161b22',
+  border:  '#30363d',
+  text:    '#e6edf3',
+  muted:   '#8b949e',
+  accent:  '#58a6ff',
+  green:   '#3fb950',
+  orange:  '#d29922',
+  purple:  '#bc8cff',
+};
+
+const LAYOUT_BASE = {
+  paper_bgcolor: PALETTE.surface,
+  plot_bgcolor:  PALETTE.bg,
+  font: { color: PALETTE.text, family: '-apple-system, "Segoe UI", system-ui, sans-serif', size: 12 },
+  margin: { t: 20, b: 40, l: 50, r: 20 },
+  xaxis: { gridcolor: PALETTE.border, linecolor: PALETTE.border, zerolinecolor: PALETTE.border },
+  yaxis: { gridcolor: PALETTE.border, linecolor: PALETTE.border, zerolinecolor: PALETTE.border },
+  legend: { bgcolor: 'rgba(0,0,0,0)', bordercolor: PALETTE.border, borderwidth: 1 },
+  hovermode: 'x unified',
+};
+
+const CONFIG = { responsive: true, displayModeBar: false };
+
+function ciRibbon(dates, upper, lower, color, name) {
+  return [
+    {
+      x: dates, y: upper,
+      mode: 'lines', line: { width: 0 }, showlegend: false,
+      hoverinfo: 'skip', name: name + ' upper',
+    },
+    {
+      x: dates, y: lower,
+      mode: 'lines', line: { width: 0 },
+      fill: 'tonexty',
+      fillcolor: color.replace(')', ', 0.15)').replace('rgb', 'rgba'),
+      showlegend: true, name: name,
+      hovertemplate: 'Upper: %{customdata[0]:.2f}<br>Lower: %{y:.2f}<extra></extra>',
+      customdata: upper.map(v => [v]),
+    },
+  ];
+}
+
+// DATA is set after fetch
+let DATA = null;
+
+function renderHist(key) {
+  const d = DATA[key];
+  const trace = {
+    x: d.dates, y: d.closes,
+    mode: 'lines',
+    name: 'Close',
+    line: { color: PALETTE.accent, width: 1.5 },
+    hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+  };
+  const layout = Object.assign({}, LAYOUT_BASE, {
+    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { tickprefix: '$' }),
+  });
+  Plotly.react('chart-hist', [trace], layout, CONFIG);
+}
+
+function renderNaive(allData, naive) {
+  // Last 1 month of actual data as context
+  const hist1m = allData.hist_1m;
+  const actualTrace = {
+    x: hist1m.dates, y: hist1m.closes,
+    mode: 'lines', name: 'Actual',
+    line: { color: PALETTE.accent, width: 1.5 },
+    hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+  };
+  const forecastTrace = {
+    x: naive.dates, y: naive.forecast,
+    mode: 'lines', name: 'Naive forecast',
+    line: { color: PALETTE.green, width: 1.5, dash: 'dash' },
+    hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+  };
+  const ribbonTraces = ciRibbon(
+    naive.dates, naive.upper, naive.lower,
+    'rgb(63,185,80)', '95% CI'
+  );
+  const layout = Object.assign({}, LAYOUT_BASE, {
+    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { tickprefix: '$' }),
+  });
+  Plotly.newPlot('chart-naive', [actualTrace, forecastTrace, ...ribbonTraces], layout, CONFIG);
+
+  document.getElementById('meta-naive').innerHTML =
+    `<span>Last close: <b>$${naive.last_close.toFixed(2)}</b></span>` +
+    `<span>σ (daily change): <b>$${naive.sigma.toFixed(2)}</b></span>` +
+    `<span>Forecast horizon: <b>${naive.dates.length} business days</b></span>`;
+}
+
+function renderDecomp(decomp) {
+  const histTrace = {
+    x: decomp.hist_dates, y: decomp.hist_close,
+    mode: 'lines', name: 'Actual',
+    line: { color: PALETTE.accent, width: 1 },
+    hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+  };
+  const fittedTrace = {
+    x: decomp.fitted_dates, y: decomp.fitted_y,
+    mode: 'lines', name: 'Fitted (T+C)',
+    line: { color: PALETTE.orange, width: 1.2, dash: 'dot' },
+    hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+  };
+  const forecastTrace = {
+    x: decomp.forecast_dates, y: decomp.forecast_y,
+    mode: 'lines', name: '5Y forecast',
+    line: { color: PALETTE.green, width: 1.5 },
+    hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+  };
+  const ribbonTraces = ciRibbon(
+    decomp.forecast_dates, decomp.upper, decomp.lower,
+    'rgb(63,185,80)', '95% CI (±1.96×RMSE)'
+  );
+  const layout = Object.assign({}, LAYOUT_BASE, {
+    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { tickprefix: '$' }),
+  });
+  Plotly.newPlot('chart-decomp',
+    [histTrace, fittedTrace, forecastTrace, ...ribbonTraces], layout, CONFIG);
+
+  document.getElementById('meta-decomp').innerHTML =
+    `<span>RMSE: <b>$${decomp.rmse.toFixed(2)}</b></span>` +
+    `<span>Harmonics selected: <b>${decomp.n_harmonics}</b></span>` +
+    `<span>Trend slope: <b>${(decomp.trend_b * 252).toFixed(2)} $/year</b></span>`;
+}
+
+function renderPeriodo(decomp) {
+  const powerTrace = {
+    x: decomp.periodogram_periods,
+    y: decomp.periodogram_power,
+    mode: 'lines',
+    name: 'Spectral power',
+    line: { color: PALETTE.accent, width: 1 },
+    hovertemplate: 'Period: %{x:.1f} days<br>Power: %{y:.4f}<extra></extra>',
+  };
+  const markerTrace = {
+    x: decomp.selected_periods,
+    y: decomp.selected_periods.map(p => {
+      const idx = decomp.periodogram_periods.findIndex(pp => Math.abs(pp - p) < 1);
+      return idx >= 0 ? decomp.periodogram_power[idx] : 0;
+    }),
+    mode: 'markers',
+    name: 'Selected harmonics',
+    marker: { color: PALETTE.orange, symbol: 'triangle-up', size: 9 },
+    hovertemplate: 'Period: %{x:.1f} days<br>Power: %{y:.4f}<extra></extra>',
+  };
+
+  const shapes = decomp.selected_periods.map(p => ({
+    type: 'line',
+    x0: p, x1: p, y0: 0, y1: 1,
+    xref: 'x', yref: 'paper',
+    line: { color: PALETTE.orange, width: 1, dash: 'dot' },
+  }));
+
+  const layout = Object.assign({}, LAYOUT_BASE, {
+    xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
+      type: 'log',
+      title: { text: 'Period (trading days)', font: { color: PALETTE.muted } },
+    }),
+    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
+      title: { text: 'Spectral Power', font: { color: PALETTE.muted } },
+    }),
+    shapes,
+  });
+
+  Plotly.newPlot('chart-periodo', [powerTrace, markerTrace], layout, CONFIG);
+
+  const harmStr = decomp.selected_periods
+    .map(p => `${p.toFixed(0)} d`)
+    .join(', ');
+  document.getElementById('meta-periodo').innerHTML =
+    `<span>Selected periods: <b>${harmStr || 'none'}</b></span>`;
+}
+
+/* =========================================================
+   MAIN — async entry point
+   ========================================================= */
+
+async function main() {
+  const loadingEl = document.getElementById('loading');
+  const errorEl   = document.getElementById('error-msg');
+  const chartsEl  = document.getElementById('charts');
+
+  try {
+    loadingEl.style.display = 'block';
+    errorEl.style.display   = 'none';
+    chartsEl.style.display  = 'none';
+
+    DATA = await fetchIBMData();
+
+    const naive  = naiveForecast(DATA.all.closes, DATA.all.dates);
+    const decomp = decompositionForecast(DATA.all.closes, DATA.all.dates);
+
+    loadingEl.style.display = 'none';
+    chartsEl.style.display  = 'block';
+
+    // Historical chart + buttons
+    renderHist('hist_5y');
+    document.querySelectorAll('.period-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderHist(btn.dataset.key);
+      });
+    });
+
+    renderNaive(DATA, naive);
+    renderDecomp(decomp);
+    renderPeriodo(decomp);
+
+  } catch (err) {
+    loadingEl.style.display = 'none';
+    errorEl.style.display   = 'block';
+    errorEl.textContent     = '⚠️ ' + err.message;
+    console.error(err);
+  }
+}
+
+main();
+</script>
+</body>
+</html>
